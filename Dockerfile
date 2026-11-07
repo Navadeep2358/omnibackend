@@ -6,11 +6,12 @@ WORKDIR /app
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl unzip \
     && rm -rf /var/lib/apt/lists/* \
-    && curl -fsSLo /tmp/terraform.zip "https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/terraform_${TERRAFORM_VERSION}_linux_amd64.zip" \
+    && curl -fsSLo "/tmp/terraform_${TERRAFORM_VERSION}_linux_amd64.zip" "https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/terraform_${TERRAFORM_VERSION}_linux_amd64.zip" \
     && curl -fsSLo /tmp/terraform_SHA256SUMS "https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/terraform_${TERRAFORM_VERSION}_SHA256SUMS" \
-    && grep 'terraform_'"${TERRAFORM_VERSION}"'_linux_amd64.zip$' /tmp/terraform_SHA256SUMS | sha256sum -c - \
-    && unzip /tmp/terraform.zip -d /usr/local/bin \
-    && rm -f /tmp/terraform.zip /tmp/terraform_SHA256SUMS
+    && cd /tmp \
+    && grep "terraform_${TERRAFORM_VERSION}_linux_amd64.zip$" terraform_SHA256SUMS | sha256sum -c - \
+    && unzip "/tmp/terraform_${TERRAFORM_VERSION}_linux_amd64.zip" -d /usr/local/bin \
+    && rm -f "/tmp/terraform_${TERRAFORM_VERSION}_linux_amd64.zip" /tmp/terraform_SHA256SUMS
 
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
