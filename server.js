@@ -48,6 +48,11 @@ const mailer = gmailUser && gmailAppPassword && !gmailAppPassword.includes("repl
   ? nodemailer.createTransport({
       service: "gmail",
       auth: { user: gmailUser, pass: gmailAppPassword },
+      // Keep auth requests inside the hosting platform's HTTP request window
+      // when Gmail SMTP is unreachable or the credential is rejected.
+      connectionTimeout: 10_000,
+      greetingTimeout: 10_000,
+      socketTimeout: 15_000,
     })
   : null;
 
@@ -399,6 +404,7 @@ app.post("/api/auth/register", authLimiter, asyncRoute(async (req, res) => {
   try {
     await issuePendingRegistrationCode(email, { name, mobile, passwordHash });
   } catch (error) {
+    console.error("Registration verification email failed:", error.code || error.name || "SMTP_ERROR");
     return res.status(error.status || 503).json({
       message: error.status ? error.message
         : "We couldn’t send the verification email. Check MySQL and Gmail settings, then try again.",
@@ -443,6 +449,7 @@ app.post("/api/auth/resend-verification", authLimiter, asyncRoute(async (req, re
     try {
       await issuePendingRegistrationCode(email, pending.registration);
     } catch (error) {
+      console.error("Verification email resend failed:", error.code || error.name || "SMTP_ERROR");
       return res.status(error.status || 503).json({
         message: error.status ? error.message : "We couldn’t send the email. Try again later.",
       });
