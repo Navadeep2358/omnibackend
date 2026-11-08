@@ -41,8 +41,9 @@ const pool = mysql.createPool({
 
 const pendingRegistrations = new Map();
 
-const resendApiKey = process.env.RESEND_API_KEY?.trim() || "";
-const resendFromEmail = process.env.RESEND_FROM_EMAIL?.trim() || "";
+const brevoApiKey = process.env.BREVO_API_KEY?.trim() || "";
+const brevoFromEmail = process.env.BREVO_FROM_EMAIL?.trim() || "";
+const brevoFromName = process.env.BREVO_FROM_NAME?.trim() || "OmniCloud";
 
 const app = express();
 app.disable("x-powered-by");
@@ -118,26 +119,26 @@ async function sendCode(email, purpose, code, recipientName = "") {
   const greeting = recipientName ? "Hi " + escapeHtml(recipientName) + "," : "Hello,";
   const expiryMinutes = codeLifetimeMs / 60000;
 
-  if (!resendApiKey || !resendFromEmail) {
-    if (isProduction) throw new Error("RESEND_API_KEY or RESEND_FROM_EMAIL is not configured.");
+  if (!brevoApiKey || !brevoFromEmail) {
+    if (isProduction) throw new Error("BREVO_API_KEY or BREVO_FROM_EMAIL is not configured.");
     console.info("[OmniCloud development email] " + email + " — " + subjects[purpose] + ": " + code);
     return;
   }
 
-  const response = await fetch("https://api.resend.com/emails", {
+  const response = await fetch("https://api.brevo.com/v3/smtp/email", {
     method: "POST",
     headers: {
-      Authorization: "Bearer " + resendApiKey,
+      "api-key": brevoApiKey,
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      from: resendFromEmail,
-      to: [email],
+      sender: { name: brevoFromName, email: brevoFromEmail },
+      to: [{ email, name: recipientName || undefined }],
       subject: subjects[purpose],
-      text: "OmniCloud — " + heading + "\n\n" + greeting + "\n\nYour verification code is " + code + ".\n\n" +
+      textContent: "OmniCloud — " + heading + "\n\n" + greeting + "\n\nYour verification code is " + code + ".\n\n" +
         "This code expires in " + expiryMinutes + " minutes. If you didn’t request this, you can ignore this email.\n\n" +
         "OmniCloud · Multi-cloud infrastructure workspace",
-      html: "<!doctype html><html><body style=\"margin:0;padding:0;background:#f3f7fc;font-family:Arial,Helvetica,sans-serif;color:#172b45\">" +
+      htmlContent: "<!doctype html><html><body style=\"margin:0;padding:0;background:#f3f7fc;font-family:Arial,Helvetica,sans-serif;color:#172b45\">" +
       "<table role=\"presentation\" width=\"100%\" cellspacing=\"0\" cellpadding=\"0\" style=\"background:#f3f7fc;padding:32px 12px\"><tr><td align=\"center\">" +
         "<table role=\"presentation\" width=\"100%\" cellspacing=\"0\" cellpadding=\"0\" style=\"max-width:560px;background:#ffffff;border:1px solid #e3ebf5;border-radius:18px;overflow:hidden\">" +
         "<tr><td style=\"padding:24px 30px;border-bottom:1px solid #edf2f8\"><table role=\"presentation\" cellspacing=\"0\" cellpadding=\"0\"><tr>" +
@@ -162,8 +163,8 @@ async function sendCode(email, purpose, code, recipientName = "") {
 
   if (!response.ok) {
     const result = await response.json().catch(() => ({}));
-    const error = new Error(result.message || "Resend rejected the email request.");
-    error.code = result.name || "RESEND_HTTP_" + response.status;
+    const error = new Error(result.message || "Brevo rejected the email request.");
+    error.code = result.code || "BREVO_HTTP_" + response.status;
     throw error;
   }
 }
@@ -410,7 +411,7 @@ app.post("/api/auth/register", authLimiter, asyncRoute(async (req, res) => {
     console.error("Registration verification email failed:", error.code || error.name || "EMAIL_PROVIDER_ERROR");
     return res.status(error.status || 503).json({
       message: error.status ? error.message
-        : "We couldn’t send the verification email. Check the Resend API key and verified sender, then try again.",
+        : "We couldn’t send the verification email. Check the Brevo API key and verified sender, then try again.",
     });
   }
   return res.status(201).json({ message: "Verification code sent." });
@@ -454,7 +455,7 @@ app.post("/api/auth/resend-verification", authLimiter, asyncRoute(async (req, re
     } catch (error) {
       console.error("Verification email resend failed:", error.code || error.name || "EMAIL_PROVIDER_ERROR");
       return res.status(error.status || 503).json({
-        message: error.status ? error.message : "We couldn’t send the email. Check the Resend API key and verified sender, then try again.",
+        message: error.status ? error.message : "We couldn’t send the email. Check the Brevo API key and verified sender, then try again.",
       });
     }
   }
@@ -598,8 +599,8 @@ async function start() {
 
   app.listen(port, host, () => {
     console.info("OmniCloud authentication backend listening on http://localhost:" + port);
-    if ((!resendApiKey || !resendFromEmail) && !isProduction) {
-      console.info("Resend is not configured; verification codes will be printed in this terminal for local development.");
+    if ((!brevoApiKey || !brevoFromEmail) && !isProduction) {
+      console.info("Brevo is not configured; verification codes will be printed in this terminal for local development.");
     }
   });
 }
