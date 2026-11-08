@@ -7,13 +7,13 @@ This backend provides account registration, email verification, password sign-in
 Requirements: Node.js 22.5 or newer.
 
 1. Start the MySQL server. On backend startup, OmniCloud creates the configured database and tables from `schema.sql`, then ensures the GCP, Azure, and AWS connection columns exist. The MySQL user in `.env` must be allowed to create the database and tables.
-2. Copy `.env.example` to `.env`; enter your MySQL password, a long random `SESSION_SECRET`, a Google App Password for the Gmail sender, `OMNICLOUD_GCP_SERVICE_ACCOUNT_EMAIL`, and Azure settings if you configure Azure.
+2. Copy `.env.example` to `.env`; enter your MySQL password, a long random `SESSION_SECRET`, a Resend API key and sender address, `OMNICLOUD_GCP_SERVICE_ACCOUNT_EMAIL`, and Azure settings if you configure Azure.
 3. From this folder, run `npm install` once, then `npm run dev`.
 4. In a second terminal, start the Vite app from `frontend/omnicloud` with `npm run dev`.
 
 On startup, the backend initializes the database from `schema.sql` and then removes legacy unverified user rows and old email-verification codes created by earlier versions. `schema.sql` is the complete final schema for fresh installations. Initialization is idempotent and does not drop tables or disconnect existing AWS connections. For older installations, the backend adds the GCP, Azure, and AWS connection columns and adds the AWS sign-in status field if needed.
 
-For live email, set `GMAIL_USER` and `GMAIL_APP_PASSWORD` in `.env`. The sender is that Gmail address. Google requires 2-Step Verification to create an App Password. Without those values, development codes are printed in the backend terminal.
+For live email, set `RESEND_API_KEY` and `RESEND_FROM_EMAIL` in `.env`. Create the API key in Resend and use a sender address on a domain verified in Resend. Resend's `onboarding@resend.dev` sender is only for limited testing; it is not a production sender for arbitrary recipients. Without these values, development codes are printed in the backend terminal.
 
 The Vite development server forwards `/api` requests to port 3001. In production, build the frontend first and run this backend; it serves the built frontend from `frontend/omnicloud/dist`.
 
@@ -92,7 +92,7 @@ Google Cloud and Azure cards currently provide local browser-only demo records. 
 
 ## Production settings
 
-Set `NODE_ENV=production`, use a unique `SESSION_SECRET` of at least 32 characters, configure MySQL and Gmail, and serve the app over HTTPS. The session cookie is HTTP-only, SameSite=Lax, and marked Secure in production. Keep `.env` private.
+Set `NODE_ENV=production`, use a unique `SESSION_SECRET` of at least 32 characters, configure MySQL and Resend (`RESEND_API_KEY` plus a verified `RESEND_FROM_EMAIL`), and serve the app over HTTPS. The session cookie is HTTP-only, SameSite=Lax, and marked Secure in production. Keep `.env` private.
 
 For inventory and monitoring, the AWS IAM Identity Center permission set needs the read actions listed above (AWS list/describe actions commonly require `Resource: "*"`). Monthly actuals need `ce:GetCostAndUsage`; the optional account forecast needs `ce:GetCostForecast`; Cost Explorer must be enabled. After the administrator updates the permission set, choose **Integrate AWS** in Cloud connections to refresh the SSO session, then press **Refresh from AWS** in the service page. The connection check only validates STS identity and does not verify these service permissions.
 Terraform provider packages now use a shared local plugin cache under the AWS state directory. Set `TERRAFORM_PLUGIN_CACHE_DIR` to another persistent directory if needed. Provider initialization still requires outbound HTTPS and adequate disk space; a full disk (`ENOSPC`) or blocked registry cannot be repaired by an AWS permission change.

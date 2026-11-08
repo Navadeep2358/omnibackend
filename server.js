@@ -5,7 +5,6 @@ import bcrypt from "bcryptjs";
 import express from "express";
 import { rateLimit } from "express-rate-limit";
 import mysql from "mysql2/promise";
-import nodemailer from "nodemailer";
 import { registerSettingsRoutes } from "./settings.js";
 import { registerCloudRoutes } from "./cloudRoutes.js";
 import { registerGcpRoutes } from "./gcpConnection.js";
@@ -42,19 +41,8 @@ const pool = mysql.createPool({
 
 const pendingRegistrations = new Map();
 
-const gmailUser = process.env.GMAIL_USER?.trim() || "";
-const gmailAppPassword = process.env.GMAIL_APP_PASSWORD?.replace(/\s/g, "") || "";
-const mailer = gmailUser && gmailAppPassword && !gmailAppPassword.includes("replace_me")
-  ? nodemailer.createTransport({
-      service: "gmail",
-      auth: { user: gmailUser, pass: gmailAppPassword },
-      // Keep auth requests inside the hosting platform's HTTP request window
-      // when Gmail SMTP is unreachable or the credential is rejected.
-      connectionTimeout: 10_000,
-      greetingTimeout: 10_000,
-      socketTimeout: 15_000,
-    })
-  : null;
+const resendApiKey = process.env.RESEND_API_KEY?.trim() || "";
+const resendFromEmail = process.env.RESEND_FROM_EMAIL?.trim() || "";
 
 const app = express();
 app.disable("x-powered-by");
@@ -130,39 +118,54 @@ async function sendCode(email, purpose, code, recipientName = "") {
   const greeting = recipientName ? "Hi " + escapeHtml(recipientName) + "," : "Hello,";
   const expiryMinutes = codeLifetimeMs / 60000;
 
-  if (!mailer) {
-    if (isProduction) throw new Error("GMAIL_USER or GMAIL_APP_PASSWORD is not configured.");
+  if (!resendApiKey || !resendFromEmail) {
+    if (isProduction) throw new Error("RESEND_API_KEY or RESEND_FROM_EMAIL is not configured.");
     console.info("[OmniCloud development email] " + email + " — " + subjects[purpose] + ": " + code);
     return;
   }
 
-  await mailer.sendMail({
-    from: "OmniCloud <" + gmailUser + ">",
-    to: email,
-    subject: subjects[purpose],
-    text: "OmniCloud — " + heading + "\n\n" + greeting + "\n\nYour verification code is " + code + ".\n\n" +
-      "This code expires in " + expiryMinutes + " minutes. If you didn’t request this, you can ignore this email.\n\n" +
-      "OmniCloud · Multi-cloud infrastructure workspace",
-    html: "<!doctype html><html><body style=\"margin:0;padding:0;background:#f3f7fc;font-family:Arial,Helvetica,sans-serif;color:#172b45\">" +
+  const response = await fetch("https://api.resend.com/emails", {
+    method: "POST",
+    headers: {
+      Authorization: "Bearer " + resendApiKey,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      from: resendFromEmail,
+      to: [email],
+      subject: subjects[purpose],
+      text: "OmniCloud — " + heading + "\n\n" + greeting + "\n\nYour verification code is " + code + ".\n\n" +
+        "This code expires in " + expiryMinutes + " minutes. If you didn’t request this, you can ignore this email.\n\n" +
+        "OmniCloud · Multi-cloud infrastructure workspace",
+      html: "<!doctype html><html><body style=\"margin:0;padding:0;background:#f3f7fc;font-family:Arial,Helvetica,sans-serif;color:#172b45\">" +
       "<table role=\"presentation\" width=\"100%\" cellspacing=\"0\" cellpadding=\"0\" style=\"background:#f3f7fc;padding:32px 12px\"><tr><td align=\"center\">" +
-      "<table role=\"presentation\" width=\"100%\" cellspacing=\"0\" cellpadding=\"0\" style=\"max-width:560px;background:#ffffff;border:1px solid #e3ebf5;border-radius:18px;overflow:hidden\">" +
-      "<tr><td style=\"padding:24px 30px;border-bottom:1px solid #edf2f8\"><table role=\"presentation\" cellspacing=\"0\" cellpadding=\"0\"><tr>" +
-      "<td style=\"width:42px;height:42px;text-align:center;vertical-align:middle;border:1px solid #d6e7ff;border-radius:12px;background:#eff6ff;color:#1769d2;font-size:24px\">☁</td>" +
-      "<td style=\"padding-left:11px;font-size:23px;font-weight:700;letter-spacing:-.7px;color:#15263e\">Omni<span style=\"color:#1769d2\">Cloud</span></td>" +
-      "</tr></table><div style=\"margin-top:8px;color:#71839a;font-size:11px;letter-spacing:1.1px\">MULTI-CLOUD INFRASTRUCTURE WORKSPACE</div></td></tr>" +
-      "<tr><td style=\"padding:32px 30px 28px\"><p style=\"margin:0 0 10px;color:#536983;font-size:15px\">" + greeting + "</p>" +
-      "<h1 style=\"margin:0 0 10px;font-size:25px;line-height:1.25;color:#15263e\">" + heading + "</h1>" +
-      "<p style=\"margin:0 0 22px;color:#61748c;font-size:15px;line-height:1.7\">Use the secure code below to " + action + ".</p>" +
-      "<div style=\"padding:18px 12px;border:1px solid #dceafe;border-radius:12px;background:#f4f8ff;text-align:center\">" +
-      "<div style=\"margin-bottom:7px;color:#61748c;font-size:11px;font-weight:700;letter-spacing:1px\">YOUR ONE-TIME CODE</div>" +
-      "<div style=\"font-size:34px;line-height:1.25;font-weight:700;letter-spacing:9px;color:#1769d2\">" + code + "</div></div>" +
-      "<p style=\"margin:20px 0 0;color:#61748c;font-size:13px;line-height:1.7\">This code expires in " + expiryMinutes +
-      " minutes and can only be used once. OmniCloud will never ask you to share this code.</p>" +
-      "<p style=\"margin:16px 0 0;color:#61748c;font-size:13px;line-height:1.7\">If you didn’t request this, you can safely ignore this email.</p></td></tr>" +
-      "<tr><td style=\"padding:18px 30px;border-top:1px solid #edf2f8;background:#fbfcfe;color:#8292a6;font-size:11px;line-height:1.6\">" +
-      "OmniCloud · One control plane for every cloud<br>This is an automated account-security email.</td></tr></table>" +
-      "</td></tr></table></body></html>",
+        "<table role=\"presentation\" width=\"100%\" cellspacing=\"0\" cellpadding=\"0\" style=\"max-width:560px;background:#ffffff;border:1px solid #e3ebf5;border-radius:18px;overflow:hidden\">" +
+        "<tr><td style=\"padding:24px 30px;border-bottom:1px solid #edf2f8\"><table role=\"presentation\" cellspacing=\"0\" cellpadding=\"0\"><tr>" +
+        "<td style=\"width:42px;height:42px;text-align:center;vertical-align:middle;border:1px solid #d6e7ff;border-radius:12px;background:#eff6ff;color:#1769d2;font-size:24px\">☁</td>" +
+        "<td style=\"padding-left:11px;font-size:23px;font-weight:700;letter-spacing:-.7px;color:#15263e\">Omni<span style=\"color:#1769d2\">Cloud</span></td>" +
+        "</tr></table><div style=\"margin-top:8px;color:#71839a;font-size:11px;letter-spacing:1.1px\">MULTI-CLOUD INFRASTRUCTURE WORKSPACE</div></td></tr>" +
+        "<tr><td style=\"padding:32px 30px 28px\"><p style=\"margin:0 0 10px;color:#536983;font-size:15px\">" + greeting + "</p>" +
+        "<h1 style=\"margin:0 0 10px;font-size:25px;line-height:1.25;color:#15263e\">" + heading + "</h1>" +
+        "<p style=\"margin:0 0 22px;color:#61748c;font-size:15px;line-height:1.7\">Use the secure code below to " + action + ".</p>" +
+        "<div style=\"padding:18px 12px;border:1px solid #dceafe;border-radius:12px;background:#f4f8ff;text-align:center\">" +
+        "<div style=\"margin-bottom:7px;color:#61748c;font-size:11px;font-weight:700;letter-spacing:1px\">YOUR ONE-TIME CODE</div>" +
+        "<div style=\"font-size:34px;line-height:1.25;font-weight:700;letter-spacing:9px;color:#1769d2\">" + code + "</div></div>" +
+        "<p style=\"margin:20px 0 0;color:#61748c;font-size:13px;line-height:1.7\">This code expires in " + expiryMinutes +
+        " minutes and can only be used once. OmniCloud will never ask you to share this code.</p>" +
+        "<p style=\"margin:16px 0 0;color:#61748c;font-size:13px;line-height:1.7\">If you didn’t request this, you can safely ignore this email.</p></td></tr>" +
+        "<tr><td style=\"padding:18px 30px;border-top:1px solid #edf2f8;background:#fbfcfe;color:#8292a6;font-size:11px;line-height:1.6\">" +
+        "OmniCloud · One control plane for every cloud<br>This is an automated account-security email.</td></tr></table>" +
+        "</td></tr></table></body></html>",
+    }),
+    signal: AbortSignal.timeout(10_000),
   });
+
+  if (!response.ok) {
+    const result = await response.json().catch(() => ({}));
+    const error = new Error(result.message || "Resend rejected the email request.");
+    error.code = result.name || "RESEND_HTTP_" + response.status;
+    throw error;
+  }
 }
 
 async function issueCode(email, purpose, recipientName = "") {
@@ -404,10 +407,10 @@ app.post("/api/auth/register", authLimiter, asyncRoute(async (req, res) => {
   try {
     await issuePendingRegistrationCode(email, { name, mobile, passwordHash });
   } catch (error) {
-    console.error("Registration verification email failed:", error.code || error.name || "SMTP_ERROR");
+    console.error("Registration verification email failed:", error.code || error.name || "EMAIL_PROVIDER_ERROR");
     return res.status(error.status || 503).json({
       message: error.status ? error.message
-        : "We couldn’t send the verification email. Check MySQL and Gmail settings, then try again.",
+        : "We couldn’t send the verification email. Check the Resend API key and verified sender, then try again.",
     });
   }
   return res.status(201).json({ message: "Verification code sent." });
@@ -449,9 +452,9 @@ app.post("/api/auth/resend-verification", authLimiter, asyncRoute(async (req, re
     try {
       await issuePendingRegistrationCode(email, pending.registration);
     } catch (error) {
-      console.error("Verification email resend failed:", error.code || error.name || "SMTP_ERROR");
+      console.error("Verification email resend failed:", error.code || error.name || "EMAIL_PROVIDER_ERROR");
       return res.status(error.status || 503).json({
-        message: error.status ? error.message : "We couldn’t send the email. Try again later.",
+        message: error.status ? error.message : "We couldn’t send the email. Check the Resend API key and verified sender, then try again.",
       });
     }
   }
@@ -595,8 +598,8 @@ async function start() {
 
   app.listen(port, host, () => {
     console.info("OmniCloud authentication backend listening on http://localhost:" + port);
-    if (!mailer && !isProduction) {
-      console.info("Gmail SMTP is not configured; verification codes will be printed in this terminal for local development.");
+    if ((!resendApiKey || !resendFromEmail) && !isProduction) {
+      console.info("Resend is not configured; verification codes will be printed in this terminal for local development.");
     }
   });
 }
