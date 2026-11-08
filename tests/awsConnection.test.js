@@ -3,22 +3,25 @@ import assert from "node:assert/strict";
 import express from "express";
 import {GetCallerIdentityCommand} from "@aws-sdk/client-sts";
 import {AwsConnectionError,getAwsLocalProfile,isAwsLocalProfileEnabled,registerCloudRoutes,verifyAwsLocalProfile,verifyAwsSsoRole} from "../cloudRoutes.js";
-import {exchangeAwsSsoCode,getAwsSsoRoleCredentials,listAwsSsoAccountsAndRoles,refreshAwsSsoToken,registerAwsSsoPublicClient} from "../awsSsoService.js";
+import {exchangeAwsSsoDeviceCode,getAwsSsoRoleCredentials,listAwsSsoAccountsAndRoles,refreshAwsSsoToken,registerAwsSsoPublicClient,startAwsSsoDeviceAuthorization} from "../awsSsoService.js";
 import {once} from "node:events";
 
 const accountId="123456789012";
 const sessionCredentials={accessKeyId:"temporary-access",secretAccessKey:"temporary-secret",sessionToken:"temporary-session"};
 
-test("AWS SSO helpers invoke injectable client factories instead of constructing arrow functions",async()=>{
+test("AWS SSO helpers use the hosted device-code flow and injectable clients",async()=>{
  const regions=[],commands=[];
- const clientFactory=region=>{regions.push(region);return{send:async command=>{commands.push(command.constructor.name);if(command.constructor.name==="RegisterClientCommand")return{clientId:"client",clientSecret:"secret",authorizationEndpoint:"https://example.com/authorize"};if(command.constructor.name==="GetRoleCredentialsCommand")return{roleCredentials:{...sessionCredentials,expiration:1800000000000}};if(command.constructor.name==="ListAccountsCommand")return{accountList:[{accountId,accountName:"Test"}]};if(command.constructor.name==="ListAccountRolesCommand")return{roleList:[{roleName:"ReadOnly"}]};return{accessToken:"token"}}}};
- await registerAwsSsoPublicClient({region:"eu-north-1",redirectUri:"https://example.com/callback",issuerUrl:"https://example.com",clientFactory});
- await exchangeAwsSsoCode({region:"eu-north-1",clientId:"client",clientSecret:"secret",code:"code",redirectUri:"https://example.com/callback",codeVerifier:"verifier",clientFactory});
+ const clientFactory=region=>{regions.push(region);return{send:async command=>{commands.push({name:command.constructor.name,input:command.input});if(command.constructor.name==="RegisterClientCommand")return{clientId:"client",clientSecret:"secret",authorizationEndpoint:"https://example.com/authorize"};if(command.constructor.name==="StartDeviceAuthorizationCommand")return{deviceCode:"device",userCode:"ABCD-EFGH",verificationUri:"https://example.com/verify",interval:5,expiresIn:600};if(command.constructor.name==="GetRoleCredentialsCommand")return{roleCredentials:{...sessionCredentials,expiration:1800000000000}};if(command.constructor.name==="ListAccountsCommand")return{accountList:[{accountId,accountName:"Test"}]};if(command.constructor.name==="ListAccountRolesCommand")return{roleList:[{roleName:"ReadOnly"}]};return{accessToken:"token"}}}};
+ await registerAwsSsoPublicClient({region:"eu-north-1",issuerUrl:"https://example.com",clientFactory});
+ await startAwsSsoDeviceAuthorization({region:"eu-north-1",clientId:"client",clientSecret:"secret",startUrl:"https://example.com/start",clientFactory});
+ await exchangeAwsSsoDeviceCode({region:"eu-north-1",clientId:"client",clientSecret:"secret",deviceCode:"device",clientFactory});
  await refreshAwsSsoToken({region:"eu-north-1",clientId:"client",clientSecret:"secret",refreshToken:"refresh",clientFactory});
  await listAwsSsoAccountsAndRoles({region:"eu-north-1",accessToken:"token",clientFactory});
  const roleCredentials=await getAwsSsoRoleCredentials({region:"eu-north-1",accessToken:"token",accountId,roleName:"ReadOnly",clientFactory});assert.equal(roleCredentials.expiration.getTime(),1800000000000);
- assert.deepEqual(regions,Array(5).fill({region:"eu-north-1"}));
- assert.deepEqual(commands,["RegisterClientCommand","CreateTokenCommand","CreateTokenCommand","ListAccountsCommand","ListAccountRolesCommand","GetRoleCredentialsCommand"]);
+ assert.deepEqual(regions,Array(6).fill({region:"eu-north-1"}));
+ assert.deepEqual(commands.map(command=>command.name),["RegisterClientCommand","StartDeviceAuthorizationCommand","CreateTokenCommand","CreateTokenCommand","ListAccountsCommand","ListAccountRolesCommand","GetRoleCredentialsCommand"]);
+ assert.equal(commands[0].input.clientType,"public");assert.deepEqual(commands[0].input.redirectUris,undefined);assert.deepEqual(commands[0].input.grantTypes,["urn:ietf:params:oauth:grant-type:device_code","refresh_token"]);
+ assert.equal(commands[1].input.startUrl,"https://example.com/start");assert.equal(commands[2].input.grantType,"urn:ietf:params:oauth:grant-type:device_code");assert.equal(commands[2].input.deviceCode,"device");
 });
 
 async function withApi(pool,verifyLocalProfile,callback,{enabled=()=>true}={}){
